@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Indic AI Voice Studio</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+    html, body { height: 100dvh; width: 100%; overflow: hidden; background: #090d16; color: #f8fafc; }
+    body { display: flex; justify-content: center; }
+    .box { width: 100%; max-width: 720px; height: 100dvh; display: flex; flex-direction: column; background: #131c2e; padding: 10px; gap: 8px; }
+    .head { display: flex; justify-content: space-between; align-items: center; }
+    .head h1 { font-size: 1.05rem; }
+    .tag { font-size: 0.7rem; background: #064e3b; color: #34d399; padding: 3px 8px; border-radius: 99px; }
+    .tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+    .tab { background: #090d16; color: #94a3b8; border: 1px solid #293855; border-radius: 8px; padding: 6px 4px; font-size: 0.72rem; font-weight: 600; cursor: pointer; text-align: center; }
+    .tab.active { background: #431407; border-color: #f97316; color: #fff; }
+    textarea { flex: 1; width: 100%; background: #090d16; color: #fff; border: 1px solid #293855; border-radius: 10px; padding: 10px; font-size: 0.95rem; resize: none; outline: none; }
+    .row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; align-items: center; }
+    .ctrl { background: #090d16; border: 1px solid #293855; border-radius: 8px; padding: 5px 8px; font-size: 0.68rem; color: #94a3b8; }
+    .ctrl input { width: 100%; accent-color: #f97316; }
+    .chk { background: #090d16; border: 1px solid #293855; border-radius: 8px; padding: 10px 8px; font-size: 0.72rem; display: flex; align-items: center; gap: 4px; }
+    .btns { display: grid; grid-template-columns: 2fr 1fr 1.2fr; gap: 6px; }
+    button.act { padding: 11px; border: none; border-radius: 9px; font-weight: 700; font-size: 0.85rem; color: #fff; cursor: pointer; }
+    .play { background: #f97316; }
+    .stop { background: #1e293b; border: 1px solid #293855 !important; }
+    .dl { background: #2563eb; }
+    .status { font-size: 0.72rem; color: #94a3b8; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="head">
+      <h1>Indic Humanised AI Voice</h1>
+      <span class="tag" id="vTag">Prabhat Neural</span>
+    </div>
+    <div class="tabs" id="tabs"></div>
+    <textarea id="txt"></textarea>
+    <div class="row">
+      <div class="ctrl">Speed: <b id="rVal">0.96x</b><input type="range" id="rate" min="0.7" max="1.3" step="0.02" value="0.96" /></div>
+      <div class="ctrl">Pitch: <b id="pVal">1.00</b><input type="range" id="pitch" min="0.8" max="1.2" step="0.02" value="1.00" /></div>
+      <label class="chk"><input type="checkbox" id="hum" checked />Humanise</label>
+    </div>
+    <div class="btns">
+      <button class="act play" id="playBtn">▶ Speak</button>
+      <button class="act stop" id="stopBtn">⏹ Stop</button>
+      <button class="act dl" id="dlBtn">⬇ MP3</button>
+    </div>
+    <div class="status" id="stat">Ready</div>
+  </div>
+  <script>
+    const P = [
+      { id: "en_male", name: "1. Eng Male", v: "Prabhat Neural", r: 0.96, p: 0.98, t: "Namaste! Welcome to our platform. Let me walk you through the details clearly." },
+      { id: "en_female", name: "2. Eng Female", v: "Neerja Neural", r: 0.99, p: 1.02, t: "Hi there! Everything is set up and ready for you. Type anything to listen." },
+      { id: "hi_male", name: "3. Hindi Male", v: "Madhur Neural", r: 0.95, p: 0.98, t: "नमस्ते! आज मैं आपकी क्या सहायता कर सकता हूँ? यहाँ कोई भी वाक्य लिखें।" },
+      { id: "hi_female", name: "4. Hindi Female", v: "Swara Neural", r: 0.98, p: 1.02, t: "नमस्कार! हमारी इस सेवा में आपका स्वागत है। यह आवाज़ बिल्कुल स्वाभाविक है।" },
+      { id: "mr_male", name: "5. Marathi Male", v: "Manohar Neural", r: 0.95, p: 0.98, t: "नमस्कार! तुमचं स्वागत आहे. तुम्हाला हवा असलेला मजकूर येथे टाईप करा." },
+      { id: "mr_female", name: "6. Marathi Female", v: "Aarohi Neural", r: 0.98, p: 1.02, t: "नमस्कार! मी तुमची कशी मदत करू शकते? कृपया तुमचा संदेश खाली लिहा." }
+    ];
+    let cur = P[0], aud = null, url = null;
+    const $ = id => document.getElementById(id);
+
+    function draw() {
+      $("tabs").innerHTML = P.map(x => `<button class="tab ${x.id===cur.id?'active':''}" onclick="pick('${x.id}')">${x.name}</button>`).join("");
+    }
+    window.pick = id => {
+      stopAll();
+      cur = P.find(x => x.id === id);
+      $("txt").value = cur.t; $("rate").value = cur.r; $("pitch").value = cur.p;
+      $("rVal").textContent = cur.r + "x"; $("pVal").textContent = cur.p;
+      $("vTag").textContent = cur.v; $("stat").textContent = "Selected: " + cur.name;
+      draw();
+    };
+    function stopAll() {
+      if (aud) { aud.pause(); aud = null; }
+      $("playBtn").textContent = "▶ Speak";
+    }
+    async function getBlob() {
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: $("txt").value, profile_id: cur.id,
+          rate: +$("rate").value, pitch: +$("pitch").value, humanise: $("hum").checked
+        })
+      });
+      if (!res.ok) throw new Error("Server error");
+      return await res.blob();
+    }
+    $("playBtn").onclick = async () => {
+      if (aud) { stopAll(); $("stat").textContent = "Stopped"; return; }
+      try {
+        $("playBtn").disabled = true; $("stat").textContent = "Generating voice...";
+        const b = await getBlob();
+        if (url) URL.revokeObjectURL(url);
+        url = URL.createObjectURL(b);
+        aud = new Audio(url);
+        aud.onended = () => { stopAll(); $("stat").textContent = "Done"; };
+        await aud.play();
+        $("playBtn").disabled = false; $("playBtn").textContent = "⏸ Stop";
+        $("stat").textContent = "Playing " + cur.v;
+      } catch (e) { $("playBtn").disabled = false; $("stat").textContent = "Error: " + e.message; }
+    };
+    $("stopBtn").onclick = () => { stopAll(); $("stat").textContent = "Stopped"; };
+    $("dlBtn").onclick = async () => {
+      try {
+        $("dlBtn").disabled = true; $("stat").textContent = "Downloading MP3...";
+        const b = await getBlob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(b); a.download = cur.id + ".mp3";
+        a.click();
+        $("stat").textContent = "Downloaded " + cur.id + ".mp3";
+      } catch (e) { $("stat").textContent = "Download error"; }
+      finally { $("dlBtn").disabled = false; }
+    };
+    $("rate").oninput = () => $("rVal").textContent = $("rate").value + "x";
+    $("pitch").oninput = () => $("pVal").textContent = $("pitch").value;
+    pick("en_male");
+  </script>
+</body>
+</html>
