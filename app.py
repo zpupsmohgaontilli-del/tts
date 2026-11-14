@@ -1,9 +1,11 @@
 import io
 import os
+import traceback
 import edge_tts
-from fastapi import FastAPI, HTTPException
+from gtts import gTTS
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="Indic Humanised AI Voice Studio")
@@ -16,12 +18,12 @@ app.add_middleware(
 )
 
 VOICE_MAP = {
-    "en_male": "en-IN-PrabhatNeural",
-    "en_female": "en-IN-NeerjaNeural",
-    "hi_male": "hi-IN-MadhurNeural",
-    "hi_female": "hi-IN-SwaraNeural",
-    "mr_male": "mr-IN-ManoharNeural",
-    "mr_female": "mr-IN-AarohiNeural",
+    "en_male": ("en-IN-PrabhatNeural", "en", "co.in"),
+    "en_female": ("en-IN-NeerjaNeural", "en", "co.in"),
+    "hi_male": ("hi-IN-MadhurNeural", "hi", "co.in"),
+    "hi_female": ("hi-IN-SwaraNeural", "hi", "co.in"),
+    "mr_male": ("mr-IN-ManoharNeural", "mr", "co.in"),
+    "mr_female": ("mr-IN-AarohiNeural", "mr", "co.in"),
 }
 
 
@@ -37,11 +39,7 @@ def shape_human_text(text: str, humanise: bool) -> str:
     cleaned = " ".join(text.strip().split())
     if not humanise:
         return cleaned
-    return (
-        cleaned.replace(",", ", ")
-        .replace("...", " ... ")
-        .replace("।", "। ")
-    )
+    return cleaned.replace(",", ", ").replace("...", " ... ").replace("।", "। ")
 
 
 def format_prosody(rate: float, pitch: float) -> tuple[str, str]:
@@ -50,30 +48,50 @@ def format_prosody(rate: float, pitch: float) -> tuple[str, str]:
     return f"{rate_pct:+d}%", f"{pitch_hz:+d}Hz"
 
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+
 @app.post("/api/tts")
 async def generate_tts(payload: TTSRequest):
     if not payload.text or not payload.text.strip():
-        raise HTTPException(status_code=400, detail="Please enter text first.")
+        return JSONResponse(status_code=400, content={"error": "Please enter text first."})
 
-    voice = VOICE_MAP.get(payload.profile_id, "en-IN-PrabhatNeural")
+    voice_name, gtts_lang, gtts_tld = VOICE_MAP.get(
+        payload.profile_id, ("en-IN-PrabhatNeural", "en", "co.in")
+    )
     rate_str, pitch_str = format_prosody(payload.rate, payload.pitch)
     final_text = shape_human_text(payload.text, payload.humanise)
-
-    communicate = edge_tts.Communicate(
-        text=final_text,
-        voice=voice,
-        rate=rate_str,
-        pitch=pitch_str,
-    )
-
     buffer = io.BytesIO()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            buffer.write(chunk["data"])
+
+    try:
+        communicate = edge_tts.Communicate(
+            text=final_text,
+            voice=voice_name,
+            rate=rate_str,
+            pitch=pitch_str,
+        )
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                buffer.write(chunk["data"])
+        if buffer.tell() == 0:
+            raise RuntimeError("Empty audio stream from edge-tts")
+    except Exception as edge_err:
+        print("Primary edge-tts failed, switching to gTTS:", repr(edge_err))
+        traceback.print_exc()
+        try:
+            buffer = io.BytesIO()
+            tts = gTTS(text=final_text, lang=gtts_lang, tld=gtts_tld, slow=(payload.rate < 0.85))
+            tts.write_to_fp(buffer)
+        except Exception as fallback_err:
+            return JSONResponse(
+                status_code=500,
+                content={"error": f"TTS failed: {str(fallback_err)}"},
+            )
 
     buffer.seek(0)
     filename = f"{payload.profile_id}-human-voice.mp3"
-
     return StreamingResponse(
         buffer,
         media_type="audio/mpeg",
@@ -127,7 +145,7 @@ async def generate_tts(payload: TTSRequest):
     .status-line span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   </style>
 </head>
-  <body>
+<body>
   <div class="app-shell">
     <header class="top-bar">
       <h1>Indic Humanised AI Voice</h1>
@@ -171,7 +189,7 @@ async def generate_tts(payload: TTSRequest):
       { id: "mr_male", shortTitle: "5. Marathi Male", sub: "मराठी पुरुष", neural: "Manohar Neural", tag: "mr-IN Male", rate: 0.95, pitch: 0.98, sample: "नमस्कार! तुमचं मनापासून स्वागत आहे. तुम्हाला हवा असलेला मजकूर येथे टाईप करा आणि नैसर्गिक आवाजात ऐका." },
       { id: "mr_female", shortTitle: "6. Marathi Female", sub: "मराठी महिला", neural: "Aarohi Neural", tag: "mr-IN Female", rate: 0.98, pitch: 1.02, sample: "नमस्कार! मी तुमची कशी मदत करू शकते? कृपया तुमचा संदेश खालील बॉक्समध्ये लिहा आणि प्ले बटण दाबा." }
     ];
-      let current = PROFILES[0], audioObj = null, cachedUrl = null;
+    let current = PROFILES[0], audioObj = null, cachedUrl = null;
     const tabContainer = document.getElementById("tabContainer");
     const scriptInput = document.getElementById("scriptInput");
     const rateSlider = document.getElementById("rateSlider");
@@ -229,7 +247,10 @@ async def generate_tts(payload: TTSRequest):
           humanise: humaniseToggle.checked
         })
       });
-      if (!res.ok) throw new Error("TTS failed");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server error ${res.status}`);
+      }
       return await res.blob();
     }
 
@@ -250,7 +271,7 @@ async def generate_tts(payload: TTSRequest):
         statusText.textContent = `Playing ${current.neural}...`;
       } catch (err) {
         speakBtn.disabled = false; speakBtn.textContent = "▶ Speak";
-        statusText.textContent = "Error generating voice. Check connection.";
+        statusText.textContent = err.message;
       }
     });
 
@@ -273,7 +294,7 @@ async def generate_tts(payload: TTSRequest):
         a.remove();
         statusText.textContent = `Downloaded ${current.id}-human-voice.mp3`;
       } catch (err) {
-        statusText.textContent = "Download failed. Try again.";
+        statusText.textContent = err.message;
       } finally {
         downloadBtn.disabled = false; downloadBtn.textContent = "⬇ MP3";
       }
@@ -297,4 +318,24 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-  
+    
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+
+
+    
