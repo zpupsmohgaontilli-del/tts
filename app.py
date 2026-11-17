@@ -7,7 +7,6 @@ import gradio as gr
 import imageio_ffmpeg
 from mutagen.mp3 import MP3
 
-# 6 Core Indian Neural Voice Profiles
 VOICE_PROFILES = {
     "1. Indian English Male": {
         "voice": "en-IN-PrabhatNeural",
@@ -37,7 +36,6 @@ VOICE_PROFILES = {
 
 
 def get_audio_duration(file_path: str) -> float:
-    """Returns exact MP3 duration in seconds."""
     return float(MP3(file_path).info.length)
 
 
@@ -52,7 +50,6 @@ async def _render_edge_tts(text: str, voice: str, rate_str: str, pitch_str: str,
 
 
 def build_atempo_filter(tempo: float) -> str:
-    """Chains ffmpeg atempo filters safely for any speed ratio without altering vocal pitch."""
     filters = []
     remaining = tempo
     while remaining > 2.0:
@@ -66,7 +63,6 @@ def build_atempo_filter(tempo: float) -> str:
 
 
 def time_fit_mp3(input_mp3: str, target_seconds: float, output_mp3: str):
-    """Adjusts speed without changing pitch and ensures exact target_seconds duration."""
     current_dur = get_audio_duration(input_mp3)
     if current_dur <= 0.05:
         raise gr.Error("Audio generation failed. Please check your script text.")
@@ -74,8 +70,6 @@ def time_fit_mp3(input_mp3: str, target_seconds: float, output_mp3: str):
     tempo = current_dur / target_seconds
     atempo_chain = build_atempo_filter(tempo)
     ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
-
-    # Exact duration lock (stretches/compresses smoothly and trims/pads to exact millisecond)
     filter_complex = f"{atempo_chain},apad=whole_dur={target_seconds:.3f}"
 
     cmd = [
@@ -107,7 +101,7 @@ async def _synthesize_audio(
     raw_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
     final_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
 
-    # Pass 1: Synthesize at natural human pace (+0%) to measure real speaking duration
+    # Pass 1: Measure natural speaking length
     await _render_edge_tts(text, voice_id, "+0%", pitch_str, raw_tmp)
     natural_dur = get_audio_duration(raw_tmp)
 
@@ -116,14 +110,12 @@ async def _synthesize_audio(
         status = f"Voice: {profile_label} | Mode: Natural Pace | Duration: {natural_dur:.2f}s"
         return final_tmp, status
 
-    # Pass 2: Pre-adjust neural speaking rate so breaths and pauses adapt organically
+    # Pass 2: Pre-adjust neural rate so breaths/pauses adapt naturally
     ideal_pct = int(round(((natural_dur / target_seconds) - 1.0) * 100))
     clamped_pct = max(-30, min(45, ideal_pct))
     smart_rate = f"{'+' if clamped_pct >= 0 else ''}{clamped_pct}%"
 
     await _render_edge_tts(text, voice_id, smart_rate, pitch_str, raw_tmp)
-
-    # Pass 3: Pitch-preserving FFmpeg time fit to exact target_seconds
     time_fit_mp3(raw_tmp, float(target_seconds), final_tmp)
     final_dur = get_audio_duration(final_tmp)
 
@@ -131,7 +123,7 @@ async def _synthesize_audio(
         os.remove(raw_tmp)
 
     status = (
-        f"Voice: {profile_label} | Natural length: {natural_dur:.2f}s → "
+        f"Voice: {profile_label} | Natural: {natural_dur:.2f}s → "
         f"Final MP3: {final_dur:.2f}s (Target: {target_seconds:.1f}s)"
     )
     return final_tmp, status
@@ -143,34 +135,27 @@ def generate_speech(text, profile_label, use_custom_time, target_seconds, pitch_
     )
 
 
-# --- Build Common Shared UI ---
-with gr.Blocks(theme=gr.themes.Soft(), title="Indic Humanised AI Voice Studio") as demo:
+with gr.Blocks(title="Indic Humanised AI Voice Studio") as demo:
     gr.Markdown(
         """
         # Indic Humanised AI Voice Studio
-        Select any of the **6 Indian Neural Voice Tabs** or use the **7. Custom Time MP3** tab to fit any script into an exact duration (e.g. `60` sec for Reels/Shorts).
+        Pick any of the **6 Indian Neural Voice Tabs** or switch to **7. Custom Time MP3** to fit your script into an exact duration (e.g. `60` sec).
         """
     )
 
-    # Shared state tracking which voice profile is active
     active_profile = gr.State(value="1. Indian English Male")
+    tab_objects = []
 
-    with gr.Tabs() as main_tabs:
-        # Tabs 1 to 6: Dedicated Pure Humanised Voice Tabs
+    with gr.Tabs():
         for label, info in VOICE_PROFILES.items():
             with gr.Tab(label) as tab:
-                gr.Markdown(f"**Active Voice:** `{label}` (`{info['voice']}`)")
+                gr.Markdown(f"**Selected Voice:** `{label}` (`{info['voice']}`)")
+                tab_objects.append((label, tab))
 
-                def _on_select_voice(lbl=label):
-                    return lbl, VOICE_PROFILES[lbl]["default_text"], False
-
-                tab.select(fn=_on_select_voice, outputs=None)
-
-        # Tab 7: Dedicated Custom Time MP3 Tab
         with gr.Tab("7. Custom Time MP3 (Reel Mode)") as custom_time_tab:
             gr.Markdown(
-                "**Exact Duration Converter:** Enter your script and set any target seconds (e.g., `60`). "
-                "Your script will automatically be turned into a **60.00-second MP3**."
+                "**Exact Duration Mode:** Enter your script and set any target seconds (e.g., `60`). "
+                "Your script will be converted into an exact **60.00-second MP3**."
             )
             custom_voice_dropdown = gr.Dropdown(
                 choices=list(VOICE_PROFILES.keys()),
@@ -178,7 +163,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Indic Humanised AI Voice Studio") 
                 label="Choose Voice for Custom Time MP3",
             )
 
-    # Common Shared Workspace (Stays consistent across all tabs)
     with gr.Row():
         with gr.Column(scale=3):
             shared_script = gr.Textbox(
@@ -191,7 +175,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Indic Humanised AI Voice Studio") 
             with gr.Row():
                 enable_custom_time = gr.Checkbox(
                     value=False,
-                    label="Enable Custom Target Time (Turn Script into Exact Seconds MP3)",
+                    label="Enable Custom Target Time (Exact Seconds MP3)",
                 )
                 target_seconds_input = gr.Number(
                     value=60,
@@ -236,15 +220,12 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Indic Humanised AI Voice Studio") 
                 interactive=False,
             )
 
-    # Wire Tab 1-6 selection to update the common workspace cleanly
-    for idx, tab_comp in enumerate(main_tabs.children[:6]):
-        lbl = list(VOICE_PROFILES.keys())[idx]
+    for lbl, tab_comp in tab_objects:
         tab_comp.select(
             fn=lambda l=lbl: (l, VOICE_PROFILES[l]["default_text"], False, l),
             outputs=[active_profile, shared_script, enable_custom_time, custom_voice_dropdown],
         )
 
-    # Wire Tab 7 (Custom Time MP3) selection to automatically turn ON Custom Time mode
     custom_time_tab.select(
         fn=lambda: True,
         outputs=[enable_custom_time],
@@ -255,7 +236,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Indic Humanised AI Voice Studio") 
         outputs=[active_profile],
     )
 
-    # Generate Button Action
     generate_btn.click(
         fn=generate_speech,
         inputs=[
@@ -269,4 +249,5 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Indic Humanised AI Voice Studio") 
     )
 
 if __name__ == "__main__":
-    demo.launch()
+    port = int(os.environ.get("PORT", 7860))
+    demo.launch(server_name="0.0.0.0", server_port=port)
